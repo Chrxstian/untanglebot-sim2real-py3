@@ -1,31 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import roslibpy
+import rospy
 import threading
-import base64
 import cv2
 import numpy as np
 import time
+from sensor_msgs.msg import CompressedImage
 
 class ImageSubscriber:
     """
     Standard subscriber for RGB CompressedImages (JPEG).
     """
-    def __init__(self, client, topic_name):
-        self.client = client
+    def __init__(self, topic_name):
         self.lock = threading.Lock()
         self.frame = None
         self.new_frame_event = threading.Event() # Event to signal new data
-
-        self.topic = roslibpy.Topic(client, topic_name, 'sensor_msgs/CompressedImage')
-        self.topic.subscribe(self._callback)
+        self.sub = rospy.Subscriber(topic_name, CompressedImage, self._callback)
 
     def _callback(self, message):
         try:
-            data_str = message['data']
-            data_bytes = base64.b64decode(data_str)
-            np_arr = np.frombuffer(data_bytes, dtype=np.uint8)
+            np_arr = np.frombuffer(message.data, dtype=np.uint8)
             img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             
             if img is not None:
@@ -33,7 +28,7 @@ class ImageSubscriber:
                     self.frame = img
                 self.new_frame_event.set() # Signal that a new frame arrived
         except Exception as e:
-            print(f"[ImageSubscriber] Error: {e}")
+            rospy.logerr(f"[ImageSubscriber] Error: {e}")
 
     def get_frame(self):
         """Non-blocking get."""
@@ -62,28 +57,24 @@ class ImageSubscriber:
             return None
 
     def close(self):
-        self.topic.unsubscribe()
+        self.sub.unregister()
 
 
 class DepthSubscriber:
     """
     Specialized subscriber for 'compressedDepth' topics.
     """
-    def __init__(self, client, topic_name):
-        self.client = client
+    def __init__(self, topic_name):
         self.lock = threading.Lock()
         self.frame = None
         self.new_frame_event = threading.Event()
-
-        self.topic = roslibpy.Topic(client, topic_name, 'sensor_msgs/CompressedImage')
-        self.topic.subscribe(self._callback)
+        self.sub = rospy.Subscriber(topic_name, CompressedImage, self._callback)
 
     def _callback(self, message):
         try:
-            data_str = message['data']
-            data_bytes = base64.b64decode(data_str)
+            data_bytes = message.data
             
-            fmt = message.get('format', '')
+            fmt = message.format
             if 'compressedDepth' in fmt and len(data_bytes) > 12:
                 data_bytes = data_bytes[12:]
             
@@ -95,7 +86,7 @@ class DepthSubscriber:
                     self.frame = img
                 self.new_frame_event.set()
         except Exception as e:
-            print(f"[DepthSubscriber] Error: {e}")
+            rospy.logerr(f"[DepthSubscriber] Error: {e}")
 
     def get_frame(self):
         """Non-blocking get."""
@@ -122,16 +113,16 @@ class DepthSubscriber:
             return None
 
     def close(self):
-        self.topic.unsubscribe()
+        self.sub.unregister()
 
 
 class RGBDSubscriber:
     """
     Wrapper class to subscribe to both RGB and Depth topics.
     """
-    def __init__(self, client, rgb_topic, depth_topic):
-        self.rgb_sub = ImageSubscriber(client, rgb_topic)
-        self.depth_sub = DepthSubscriber(client, depth_topic)
+    def __init__(self, rgb_topic, depth_topic):
+        self.rgb_sub = ImageSubscriber(rgb_topic)
+        self.depth_sub = DepthSubscriber(depth_topic)
 
     def get_frames(self, timeout=2.0):
         print("\n[RGBDSubscriber] Syncing frames...")

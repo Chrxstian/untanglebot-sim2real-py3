@@ -1,0 +1,20 @@
+# 入力
+geometry_msgs/Vector3 Force_left
+int32 grasp_idx_left
+geometry_msgs/Vector3 Force_right
+int32 grasp_idx_right
+string frame # WAIST, GYM
+
+# optional overrides（0や負値等で「デフォルト使用」にすると実装が楽）
+float32 step_m            # [m/step]  <= 0 ならサーバ既定値
+float32 sleep_dt          # [s]       <= 0 ならサーバ既定値
+int32   max_steps         #           <= 0 ならサーバ既定値
+float32 force_threshold   # [N]       <  0 ならサーバ既定値
+bool    workspace_limits
+
+---
+# 出力
+bool   success
+string stop_reason    # "COMPLETED" / "FORCE_LIMIT" / "PLAN_FAIL" / "TIMEOUT" など
+int32  steps_done
+float32 norm_force_last

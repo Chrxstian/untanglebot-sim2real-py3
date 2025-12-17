@@ -4,8 +4,7 @@
 import os
 import cv2
 import traceback
-import time
-import roslibpy
+import rospy
 import rospkg 
 
 from nextage_vision.image_subscriber import RGBDSubscriber, ImageSubscriber
@@ -16,46 +15,39 @@ rospack = rospkg.RosPack()
 pkg_path = rospack.get_path('nextage_vision')
 CONFIG_DIR = os.path.join(pkg_path, "src/nextage_vision/config") + "/"
 
-ROS_HOST = 'localhost'
-ROS_PORT = 9090
 RGB_TOPIC = '/camera/color/image_rect_color/compressed'
 DEPTH_TOPIC = '/camera/aligned_depth_to_color/image_raw/compressedDepth'
 USE_DEPTH = True
 
 def main():
     sub = None
-    ros_client = None
     
     try:
-        ros_client = roslibpy.Ros(host=ROS_HOST, port=ROS_PORT)
-        print(f"Connecting to rosbridge at {ROS_HOST}:{ROS_PORT}...")
-        ros_client.run()
-        
-        # Wait for connection
-        start_time = time.time()
-        while not ros_client.is_connected:
-            time.sleep(0.1)
-            if time.time() - start_time > 10:
-                raise Exception("Connection to rosbridge timed out.")
-        print("Successfully connected.")
+        print("Initializing ROS Node...")
+        rospy.init_node('test_rope_estimation', anonymous=True)
         
         # 1. Initialize Subscriber
         if USE_DEPTH:
             print("Initializing RGB-D Subscriber...")
-            sub = RGBDSubscriber(ros_client, RGB_TOPIC, DEPTH_TOPIC)
+            sub = RGBDSubscriber(RGB_TOPIC, DEPTH_TOPIC)
         else:
             print("Initializing RGB-only Subscriber...")
-            sub = ImageSubscriber(ros_client, RGB_TOPIC)
+            sub = ImageSubscriber(RGB_TOPIC)
         
         # 2. Initialize Logic & Model
         image_processor = ImageProcessor(CONFIG_DIR, use_depth=USE_DEPTH)
-        rope_estimator_model = RopePoseEstimator(save_visualizations=True, num_balls=30, ros_client=ros_client, use_depth=USE_DEPTH)
+        
+        rope_estimator_model = RopePoseEstimator(
+            save_visualizations=True, 
+            num_balls=30, 
+            use_depth=USE_DEPTH
+        )
         
         print("\n" + "="*50)
         print(f"Test script ready. USE_DEPTH: {USE_DEPTH}")
         print("="*50)
         
-        while True:
+        while not rospy.is_shutdown():
             key = input("\nPress 's' and ENTER to estimate/publish (or 'q' to quit): ")
             
             if key.lower() == 'q':
@@ -117,7 +109,6 @@ def main():
         traceback.print_exc()
     finally:
         if sub: sub.close()
-        if ros_client: ros_client.terminate()
 
 if __name__ == '__main__':
     main()

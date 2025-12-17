@@ -6,9 +6,8 @@ import cv2
 import numpy as np
 import torch
 import json
+import rospy
 import time
-import roslibpy
-import roslibpy.core
 from datetime import datetime
 
 from nextage_vision.image_subscriber import ImageSubscriber, RGBDSubscriber
@@ -16,38 +15,53 @@ from nextage_vision.image_processor import ImageProcessor
 from nextage_vision.mask_utils import create_hsv_mask, create_intersection_mask
 from libRopeEstimator.RopePoseEstimator import RopePoseEstimator
 
+from nextage_control.srv import ExecutePolicyAction, ExecutePolicyActionRequest
+
 import rospkg
 rospack = rospkg.RosPack()
 vision_pkg_path = rospack.get_path('nextage_vision')
 CONFIG_DIR = os.path.join(vision_pkg_path, "src/nextage_vision/config") + "/"
 
-ROS_HOST = 'localhost'
-ROS_PORT = 9090
 CAMERA_TOPIC = '/camera/color/image_rect_color/compressed'
 DEPTH_TOPIC = '/camera/aligned_depth_to_color/image_raw/compressedDepth'
 USE_DEPTH = True
 
 MESSAGE_TYPE = 'sensor_msgs/CompressedImage'
 
-def send_service_request(client, request_data):
+def send_service_request(request_data):
     try:
         print("\n" + "="*50)
-        if not client.is_connected:
-            raise Exception("ROS Client is not connected. Cannot send service request.")
-
-        service = roslibpy.Service(client, '/policy_action_service', 'untanglebot_sim2real/PolicyAction')
+        
+        service_name = '/policy_action_service'
+        rospy.wait_for_service(service_name, timeout=2.0)
+        service = rospy.ServiceProxy(service_name, ExecutePolicyAction)
         
         print("Sending service request:")
         print(json.dumps(request_data, indent=2))
         
-        request = roslibpy.ServiceRequest(request_data)
-        result = service.call(request)
+        # Map dictionary to ROS Message Object
+        req = ExecutePolicyActionRequest()
+        req.Force_left.x = request_data['force_left']['x']
+        req.Force_left.y = request_data['force_left']['y']
+        req.Force_left.z = request_data['force_left']['z']
+        req.grasp_idx_left = int(request_data['grasp_idx_left'])
+        
+        req.Force_right.x = request_data['force_right']['x']
+        req.Force_right.y = request_data['force_right']['y']
+        req.Force_right.z = request_data['force_right']['z']
+        req.grasp_idx_right = int(request_data['grasp_idx_right'])
+        
+        req.frame = request_data['frame_id']
+        req.force_threshold = request_data['force_threshold']
+
+        # Call the service
+        result = service(req)
         
         print("\nReceived service response:")
         print(result)
         print("="*50 + "\n")
-        return result['success']
-
+        return True
+    
     except Exception as e:
         print(f"An error occurred during service call: {e}")
         return False
@@ -55,37 +69,29 @@ def send_service_request(client, request_data):
 def main():
     
     sub = None
-    ros_client = None
+    
     try:
-        ros_client = roslibpy.Ros(host=ROS_HOST, port=ROS_PORT)
-        print(f"Connecting to rosbridge at {ROS_HOST}:{ROS_PORT}...")
-        ros_client.run()
-        
-        connect_timeout = 10
-        start_time = time.time()
-        while not ros_client.is_connected:
-            time.sleep(0.1)
-            if time.time() - start_time > connect_timeout:
-                raise Exception("Connection to rosbridge timed out.")
+        print("Initializing ROS Node...")
+        rospy.init_node('il_action_sender', anonymous=True)
         print("Successfully connected.")
         
         if USE_DEPTH:
-            sub = RGBDSubscriber(ros_client, CAMERA_TOPIC, DEPTH_TOPIC)
+            sub = RGBDSubscriber(CAMERA_TOPIC, DEPTH_TOPIC)
         else:
-            sub = ImageSubscriber(ros_client, CAMERA_TOPIC)
+            sub = ImageSubscriber(CAMERA_TOPIC)
             
         image_processor = ImageProcessor(CONFIG_DIR, use_depth=USE_DEPTH)
-        rope_estimator_model = RopePoseEstimator(save_visualizations=True, num_balls=30, ros_client=ros_client, use_depth=USE_DEPTH)
+        rope_estimator_model = RopePoseEstimator(save_visualizations=True, num_balls=30, use_depth=USE_DEPTH)
         
         # Wait for the first frame
-        print("Waiting for first image frame from rosbridge...")
+        print("Waiting for first image frame...")
         
         if isinstance(sub, RGBDSubscriber):
             img, depth_img = sub.get_frames(timeout=5.0)
         else:
             img = sub.get_frame()
             depth_img = None
-            while img is None:
+            while img is None and not rospy.is_shutdown():
                 cv2.waitKey(1)
                 img = sub.get_frame()
 
@@ -297,10 +303,11 @@ def main():
             'force_right': {'x': force_right[0], 'y': force_right[1], 'z': force_right[2]},
             'grasp_idx_right': grasp_idx_right,
 
-            'frame_id': 'WAIST'
+            'frame_id': 'WAIST',
+            'force_threshold': 15.0           
         }
         
-        send_service_request(ros_client, request_data)
+        send_service_request(request_data)
             
     except KeyboardInterrupt:
         print("Shutting down via KeyboardInterrupt.")
@@ -313,13 +320,7 @@ def main():
             try:
                 sub.close()
             except AttributeError as e:
-                print(f"roslibpy internal error during ImageSubscriber.close() (ignoring): {e}")
-        if ros_client:
-            try:
-                ros_client.terminate()
-                print("Connection terminated.")
-            except AttributeError as e:
-                print(f"roslibpy internal error during main terminate (ignoring): {e}")
+                pass
             
 if __name__ == "__main__":
     main()

@@ -6,7 +6,7 @@ import time
 import cv2
 import numpy as np
 import argparse
-import roslibpy
+import rospy
 import rospkg
 import json
 
@@ -16,8 +16,6 @@ rospack = rospkg.RosPack()
 pkg_path = rospack.get_path('nextage_vision')
 CONFIG_DIR = os.path.join(pkg_path, "src/nextage_vision/config")
 
-ROS_HOST = 'localhost'
-ROS_PORT = 9090
 CAMERA_TOPIC = '/camera/color/image_rect_color/compressed'
 DEFAULT_CONFIG_PATH = os.path.join(CONFIG_DIR, 'default_mask.json')
 
@@ -81,9 +79,8 @@ def save_config(config_path, window_name):
     except Exception as e:
         print(f"\n--- Error saving config: {e} ---\n")
 
-
 def main():
-    parser = argparse.ArgumentParser(description="HSV Mask Tuning Tool")
+    parser = argparse.ArgumentParser(description="HSV Mask Tuning Tool (Native ROS)")
     parser.add_argument(
         '-c', '--config', 
         type=str, 
@@ -97,33 +94,23 @@ def main():
     os.makedirs(CONFIG_DIR, exist_ok=True)
     initial_values = load_config(config_path)
 
-    # --- Create client ---
-    ros_client = None
-    try:
-        ros_client = roslibpy.Ros(host=ROS_HOST, port=ROS_PORT)
-        print(f"Connecting to rosbridge at {ROS_HOST}:{ROS_PORT}...")
-        ros_client.run()
-        
-        connect_timeout = 10
-        start_time = time.time()
-        while not ros_client.is_connected:
-            time.sleep(0.1)
-            if time.time() - start_time > connect_timeout:
-                raise Exception("Connection to rosbridge timed out.")
-        print("Successfully connected.")
-    except Exception as e:
-        print(f"Error connecting to rosbridge: {e}")
-        return
+    # --- Initialize ROS Node ---
+    rospy.init_node('adjust_color_range', anonymous=True)
+    print("ROS Node initialized.")
 
-    # --- Setup ROS Connection ---
-    sub_img = ImageSubscriber(client=ros_client, topic_name=CAMERA_TOPIC)
-    time.sleep(0.2) # give it a moment to get first frame
+    # --- Setup Subscriber ---
+    sub_img = ImageSubscriber(topic_name=CAMERA_TOPIC)
+    
+    print("Waiting for first frame...")
+    if sub_img.wait_for_new_frame(timeout=5.0) is None:
+        print("Error: No frame received after 5 seconds. Check camera topic.")
+        return
 
     # --- Setup Window and Trackbars ---
     window_name = 'mask_image'
     cv2.namedWindow(window_name)
 
-    # trackbars (H_max auf 179 ist korrekt für OpenCV HSV)
+    # trackbars
     cv2.createTrackbar('H_low',   window_name, 0,   179, nothing)
     cv2.createTrackbar('H_high', window_name, 179, 179, nothing)
     cv2.createTrackbar('S_low',   window_name, 0,   255, nothing)
@@ -155,7 +142,7 @@ def main():
     print("----------------\n")
 
     try:
-        while True:
+        while not rospy.is_shutdown():
             img = sub_img.get_frame()
             if img is None:
                 cv2.waitKey(1)
@@ -200,9 +187,7 @@ def main():
                 save_config(config_path, window_name)
 
     finally:
-        sub_img.close()
         cv2.destroyAllWindows()
-
 
 if __name__ == '__main__':
     main()

@@ -7,28 +7,18 @@ import cv2
 import matplotlib
 matplotlib.use('TkAgg') 
 import matplotlib.pyplot as plt
-import roslibpy
+import rospy
 from nextage_vision.image_subscriber import RGBDSubscriber
 
-ROS_HOST = 'localhost'
-ROS_PORT = 9090
 RGB_TOPIC = '/camera/color/image_rect_color/compressed'
 DEPTH_TOPIC = '/camera/aligned_depth_to_color/image_raw/compressedDepth'
 
 def main():
-    print(f"Connecting to ROS Bridge at {ROS_HOST}:{ROS_PORT}...")
-    client = roslibpy.Ros(host=ROS_HOST, port=ROS_PORT)
-    client.run()
-
-    start_time = time.time()
-    while not client.is_connected:
-        time.sleep(0.1)
-        if time.time() - start_time > 5:
-            print("ERROR: Could not connect to rosbridge.")
-            sys.exit(1)
+    print("Initializing ROS Node...")
+    rospy.init_node('test_depth_sensor', anonymous=True)
             
     print("Connected. Initializing Subscriber...")
-    cam = RGBDSubscriber(client, RGB_TOPIC, DEPTH_TOPIC)
+    cam = RGBDSubscriber(RGB_TOPIC, DEPTH_TOPIC)
     
     plt.ion()
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
@@ -37,7 +27,7 @@ def main():
     print("Updating every 2 seconds. Close window or Ctrl+C to quit.")
 
     try:
-        while plt.fignum_exists(fig.number):
+        while plt.fignum_exists(fig.number) and not rospy.is_shutdown():
             
             rgb, depth = cam.get_frames(timeout=3.0) 
             
@@ -73,8 +63,6 @@ def main():
         print(f"\nError: {e}")
     finally:
         print("Closing connections...")
-        cam.close()
-        client.terminate()
         plt.close('all')
         print("Done.")
 

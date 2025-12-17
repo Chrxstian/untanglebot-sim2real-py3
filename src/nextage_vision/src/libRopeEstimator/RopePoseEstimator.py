@@ -5,35 +5,31 @@ import os
 import cv2
 import torch
 import matplotlib.pyplot as plt
-import torch.nn as nn
-import torch.nn.functional as F
-from torchvision import models
-import torchvision.ops
 from . import config
 from .model import TangledRopeKeypointModel
 import numpy as np
-import roslibpy
+
+import rospy
 import rospkg
+from std_msgs.msg import Float64MultiArray
 
 class RopePoseEstimator():
-    def __init__(self, save_visualizations=False, num_balls=30, ros_client=None, use_depth=False):
+    def __init__(self, save_visualizations=False, num_balls=30, use_depth=False):
         
         rospack = rospkg.RosPack()
         package_path = rospack.get_path('nextage_vision')
         checkpoints_dir = os.path.join(package_path, "src/libRopeEstimator/checkpoints")
         vis_dir_path = os.path.join(package_path, "vis")
-        
+                
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.image_width = 256
         self.num_balls = num_balls
 
         checkpoint_files = os.listdir(checkpoints_dir)
-        assert len(checkpoint_files) == 1, f"Please ensure there is exactly one checkpoint in {checkpoints_dir}. Found: {checkpoint_files}"
+        if len(checkpoint_files) != 1:
+             raise ValueError(f"Expected exactly one .pth checkpoint in {checkpoints_dir}, found: {checkpoint_files}")
         checkpoint_name = checkpoint_files[0]
         checkpoint_path = os.path.join(checkpoints_dir, checkpoint_name)
-
-        # Initialize ROS client
-        self.ros_client = ros_client
 
         # Initialize the visualization directory
         self.save_visualizations = save_visualizations
@@ -53,16 +49,8 @@ class RopePoseEstimator():
         # Saving the last model output
         self.last_model_output = None
         
-        # Initialize ROS publisher for publishing the rope pose estimations
-        self.publisher = None
-        if ros_client and ros_client.is_connected:
-            try:
-                self.publisher = roslibpy.Topic(ros_client, '/rope_pose_estimations', 'std_msgs/Float64MultiArray')
-                print("RopePoseEstimator: Publisher for /rope_pose_estimations initialized.")
-            except Exception as e:
-                print(f"RopePoseEstimator: Failed to create publisher: {e}")
-        else:
-            print("RopePoseEstimator: ros_client not provided or not connected. Publisher will not be created.")
+        self.publisher = rospy.Publisher('/rope_pose_estimations', Float64MultiArray, queue_size=1)
+        print("RopePoseEstimator: Publisher for /rope_pose_estimations initialized.")
 
         # Load the model weights
         print("Loaded RopePoseEstimator model from {}".format(checkpoint_path))
@@ -134,7 +122,7 @@ class RopePoseEstimator():
 
         if timestamp is None and self.save_visualizations:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            os.makedirs(self.vis_dir + "/" + timestamp, exist_ok=True)
+            os.makedirs(os.path.join(self.vis_dir, timestamp), exist_ok=True)
 
         mask_channels = segmentation_tensor[:, :, :2] 
         rope_l_mask = mask_channels[:, :, 0] == 1
@@ -243,12 +231,12 @@ class RopePoseEstimator():
         if self.publisher:
             try:
                 data_list = pose_estimations.flatten().tolist()
-                msg = {'data': data_list}
+                
+                msg = Float64MultiArray()
+                msg.data = data_list
                 self.publisher.publish(msg)
                 print("Successfully published (2, 30, 2) pose estimations to /rope_pose_estimations")
             except Exception as e:
                 print(f"Failed to publish pose estimations: {e}")
-        else:
-            print("Pose estimation publisher not initialized. Skipping publish.")
-            
+        
         return pose_estimations

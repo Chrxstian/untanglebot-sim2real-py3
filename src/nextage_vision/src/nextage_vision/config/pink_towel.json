@@ -1,0 +1,10 @@
+{
+    "h_low": 110,
+    "h_high": 157,
+    "s_low": 23,
+    "s_high": 255,
+    "v_low": 0,
+    "v_high": 255,
+    "erosion": 0,
+    "dilation": 0
+}

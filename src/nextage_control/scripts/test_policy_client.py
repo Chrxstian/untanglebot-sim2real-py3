@@ -81,7 +81,7 @@ TEST_CASES = {
         "request": {
             'force_left': {'x': 0.0, 'y': 0.0, 'z': 0.0}, 'grasp_idx_left': 20,
             'force_right': {'x': 0.0, 'y': 1.0, 'z': 0.0}, 'grasp_idx_right': 20,
-            'frame_id': 'WAIST', 'force_threshold': 15.0
+            'frame_id': 'GYM', 'force_threshold': 15.0
         }
     },
     '10': {

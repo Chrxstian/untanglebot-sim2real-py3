@@ -1,0 +1,14 @@
+# Request
+string arm             # "left" or "right"
+float64[] direction    # [dx, dy, dz] normalized direction vector
+float64 speed          # Speed in [m/s]
+float64 distance       # Maximum pull distance in [m]
+float64 force_threshold # Force limit [N]
+
+---
+# Response
+bool success           # True if action finished (goal reached OR force limit)
+bool force_limit_met   # True if the stop was caused by the force limit
+string message         # e.g. "Goal Reached", "Force Limit Triggered", "IK Failed"
+float64[] force_log_left    # Raw log: flattened array of [time, fx, fy, fz, time, fx, ...]
+float64[] force_log_right   # Raw log: flattened array of [time, fx, fy, fz, time, fx, ...]

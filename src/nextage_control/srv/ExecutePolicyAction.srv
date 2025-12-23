@@ -11,6 +11,7 @@ float32 sleep_dt          # [s]       <= 0 ならサーバ既定値
 int32   max_steps         #           <= 0 ならサーバ既定値
 float32 force_threshold   # [N]       <  0 ならサーバ既定値
 bool    workspace_limits
+bool    use_il_policy     # Use imitation learning policy
 
 ---
 # 出力

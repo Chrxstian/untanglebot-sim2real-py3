@@ -25,13 +25,13 @@ class NextageKinematic(RobotKinematic):
                 'max': torch.tensor([ 1.53,  1.04,  0.00,  2.87,  1.74,  2.84], device=device)
             }
             # Wait Pose
-            th_rest = [0.36, -1.0, -1.75, -0.4, 1.0, -0.7]
+            th_rest = [0.4769, -0.5823, -1.9836, -0.3516, 0.8405, -1.1423]
         else:
             self.joint_limits = {
                 'min': torch.tensor([-1.53, -2.44, -2.75, -2.87, -1.74, -2.84], device=device),
                 'max': torch.tensor([ 1.53,  1.04,  0.00,  1.83,  1.74,  2.84], device=device)
             }
-            th_rest = [-0.36, -1.0, -1.75, 0.4, 1.0, 0.7]
+            th_rest = [-0.4759, -0.5828, -1.9834, 0.3534, 0.8424, -1.1607]
 
         if isinstance(th_rest, torch.Tensor):
              th_rest = th_rest.clone().detach().to(device=device, dtype=torch.float32)

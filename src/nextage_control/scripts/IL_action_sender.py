@@ -53,6 +53,7 @@ def send_service_request(request_data):
         
         req.frame = request_data['frame_id']
         req.force_threshold = request_data['force_threshold']
+        req.use_il_policy = True
 
         # Call the service
         result = service(req)

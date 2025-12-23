@@ -4,9 +4,12 @@
 import rospy
 import numpy as np
 import torch
-import time
+import os
 import math
+import rospkg
+from datetime import datetime
 from geometry_msgs.msg import WrenchStamped
+from std_msgs.msg import Bool
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
@@ -18,6 +21,12 @@ class IKPullService:
     def __init__(self):
         rospy.init_node('ik_pull_service_node')
         self.device = "cpu"
+
+        rospack = rospkg.RosPack()
+        self.pkg_path = rospack.get_path('nextage_custom_ik')
+        
+        self.vis_dir = os.path.join(self.pkg_path, "vis")
+        os.makedirs(self.vis_dir, exist_ok=True)
 
         # 1. Initialize Kinematics Solvers and Visualizers
         rospy.loginfo("[IK-Service] Loading Kinematics Solvers...")
@@ -49,8 +58,11 @@ class IKPullService:
         }
 
         rospy.Subscriber('/joint_states', JointState, self.cb_joints)
-        rospy.Subscriber('/l_wrist_ft/wrench_gym', WrenchStamped, self.cb_force_l)
-        rospy.Subscriber('/r_wrist_ft/wrench_gym', WrenchStamped, self.cb_force_r)
+        rospy.Subscriber('/left/ft_gym_tared', WrenchStamped, self.cb_force_l)
+        rospy.Subscriber('/right/ft_gym_tared', WrenchStamped, self.cb_force_r)
+
+        # Force Sensor Tare Publisher
+        self.tare_pub = rospy.Publisher("/ft/trigger_tare", Bool, queue_size=1)
 
         self.srv = rospy.Service('/execute_force_pull', ExecuteForcePull, self.handle_pull)
         rospy.loginfo("[IK-Service] Service Ready: /execute_force_pull")
@@ -78,8 +90,15 @@ class IKPullService:
         self.force_log_r.append([msg.header.stamp.to_sec(), msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z])
 
     def clear_force_history(self):
+        self.current_force_mag = {'left': 0.0, 'right': 0.0}
         self.force_log_l = []
         self.force_log_r = []
+        
+    def tare_ft_sensors(self):
+        msg = Bool(True)
+        rospy.loginfo("Sending FT tare trigger...")
+        rospy.sleep(0.1)
+        self.tare_pub.publish(msg)
 
     def get_arm_joints(self, arm):
         names = self.joint_names_map[arm]
@@ -89,6 +108,8 @@ class IKPullService:
             return None
 
     def handle_pull(self, req):
+        self.tare_ft_sensors()
+        
         arm = req.arm.lower()
         if arm not in self.solvers:
             return ExecuteForcePullResponse(success=False, message="Invalid Arm ID", force_limit_met=False)
@@ -109,101 +130,120 @@ class IKPullService:
              return ExecuteForcePullResponse(success=False, message="Zero Direction Vector", force_limit_met=False)
         dir_vec = dir_vec / norm
 
-        # Loop Timing
-        dt = 0.05 # 20Hz
+        dt = 0.005
+        rate = rospy.Rate(1.0 / dt)
         total_time = req.distance / req.speed
         steps = int(total_time / dt)
         
-        rospy.loginfo("[IK-Service] Pulling {} for {:.2f}m at {:.2f}m/s ({} steps)".format(arm, req.distance, req.speed, steps))
+        mode_str = "DRY RUN PREVIEW" if req.dry_run else "REAL EXECUTION"
+        rospy.loginfo(f"[IK-Service] {mode_str}: Pulling {arm} for {req.distance:.2f}m ({steps} steps)")
 
-        # Clear force log and start monitoring
-        self.monitoring_active = True
-        self.clear_force_history()
-        force_triggered = False
+        # State Reset
+        if not req.dry_run:
+            self.monitoring_active = True
+            self.clear_force_history()
         
-        # --- Control Loop ---
-        for _ in range(steps):
+        force_triggered = False
+        ik_failed = False
+        fail_reason = ""
+        
+        # --- Trajectory Generation Loop ---
+        for i in range(steps):
             if rospy.is_shutdown(): break
 
             # 1. Force Check
-            current_force = self.current_force_mag[arm]
+            if not req.dry_run:
+                current_force = self.current_force_mag[arm]
+                if current_force > req.force_threshold:
+                    force_triggered = True
+                    rospy.logwarn(f"[IK-Service] FORCE LIMIT TRIGGERED ({current_force:.2f}N)")
+                    break
 
-            if current_force > req.force_threshold:
-                force_triggered = True
-                rospy.logwarn("[IK-Service] FORCE LIMIT TRIGGERED ({:.2f}N > {:.2f}N)".format(current_force, req.force_threshold))
-                break
-
-            # 2. Predict Next Target (Cartesian)
+            # 2. FK & Target Generation
             current_pos_hom, _ = solver.batch_FK(q_curr)
-            
             next_pos_hom = current_pos_hom.clone()
-            move_step = torch.tensor(dir_vec * req.speed * dt, dtype=torch.float32, device=self.device)
             
-            # Add translation to position part of matrix
+            # Move along vector
+            move_step = torch.tensor(dir_vec * req.speed * dt, dtype=torch.float32, device=self.device)
             next_pos_hom[0, :3, 3] += move_step
             
-            # 3. Solve IK (Newton)
+            # 3. IK Solve
             q_next = solver.batch_ik_newton(next_pos_hom, q_curr, limits=solver.joint_limits, max_iter=3)
             
-            # Verify the hand position after IK, if too far from target, abort (unreachable goal)
+            diff = q_next - q_curr
+            diff_list = diff.squeeze().tolist()
+            calculated_velocities = [d / dt for d in diff_list]
+            calculated_velocities = [max(min(v, 2.0), -2.0) for v in calculated_velocities]
+
+            # 4. Workspace Safety Check
             achieved_pos_hom, _ = solver.batch_FK(q_next)
             target_xyz = next_pos_hom[0, :3, 3]
             actual_xyz = achieved_pos_hom[0, :3, 3]
             error_dist = torch.norm(target_xyz - actual_xyz).item()
-            if error_dist > 0.005:
-                rospy.logwarn(f"[IK-Service] Workspace Limit Reached - Planning failed! Tracking Error: {error_dist*1000:.2f} mm")
-                rospy.logwarn(f"[IK-Service] Check ik_pull_{arm}_fail.gif for details.")
-
-                output_file = f"./src/nextage_custom_ik/vis/ik_pull_{arm}_fail.gif"
-                self.visualizers[arm].generate_gif(joint_log, filename=output_file, fps=int(1/dt))
-
-                self.monitoring_active = False
-                flat_log_l = [val for entry in self.force_log_l for val in entry]
-                flat_log_r = [val for entry in self.force_log_r for val in entry]
-                return ExecuteForcePullResponse(
-                    success=False, 
-                    message=f"Workspace Limit Reached (Error: {error_dist*1000:.1f}mm)", 
-                    force_limit_met=False,
-                    force_log_left=flat_log_l,
-                    force_log_right=flat_log_r
-                )
-
-            # 4. Publish Command
-            self.publish_traj(arm, q_next[0].tolist(), dt)
             
-            # 5. Update State
+            if error_dist > 0.005:
+                ik_failed = True
+                fail_reason = f"Workspace Limit (Error: {error_dist*1000:.1f}mm)"
+                rospy.logwarn(f"[IK-Service] {fail_reason}")
+                break
+
+            # 5. Execution vs Logging
             q_curr = q_next
             joint_log.append(q_curr.clone().detach().cpu())
-            rospy.sleep(dt)
+            
+            if not req.dry_run:
+                # Pass calculated velocities to new publish_traj signature
+                duration_padding = dt * 1.2
+                self.publish_traj(arm, q_next[0].tolist(), calculated_velocities, duration_padding)
+                rate.sleep()
 
-        # --- C. Finish ---
-        msg = "Force Limit Exceeded" if force_triggered else "Goal Reached"
-        
-        # Visualize Trajectory
-        # timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
-        # output_file = "./src/nextage_custom_ik/vis/ik_pull_{}_{}.gif".format(arm, timestamp)
-        # self.visualizers[arm].generate_gif(trajectory_list=joint_log, filename=output_file, fps=int(1/dt))
+        # Ensures robot doesn't drift after the loop finishes
+        if not req.dry_run:
+            final_pos = q_curr[0].tolist()
+            zero_vel = [0.0] * len(final_pos)
+            self.publish_traj(arm, final_pos, zero_vel, 0.5)
+            rospy.loginfo("[IK-Service] Movement finished. Holding position.")
 
-        # Send Response
+        # --- Finish & Response ---
         self.monitoring_active = False
-        flat_log_l = [val for entry in self.force_log_l for val in entry]
-        flat_log_r = [val for entry in self.force_log_r for val in entry]
-        rospy.loginfo("Sending Pull Service Response")
+        output_gif = ""
+
+        if req.dry_run or ik_failed:
+            # Generate GIF for preview or failure analysis
+            current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            timestamp_str = f"preview_{current_time}" if req.dry_run else f"fail_{current_time}"
+            output_gif = os.path.join(self.vis_dir, f"ik_pull_{arm}_{timestamp_str}.gif")
+            rospy.loginfo(f"[IK-Service] Generating GIF at {output_gif}...")
+            self.visualizers[arm].generate_gif(joint_log, filename=output_gif, fps=30)
+
+        # Construct Message
+        if ik_failed:
+            final_msg = f"Failed: {fail_reason}"
+            success = False
+        elif force_triggered:
+            final_msg = "Force Limit Exceeded"
+            success = True
+        else:
+            final_msg = "Dry Run Success" if req.dry_run else "Goal Reached"
+            success = True
+
         return ExecuteForcePullResponse(
-            success=True, 
-            message=msg, 
+            success=success, 
+            message=final_msg, 
             force_limit_met=force_triggered,
-            force_log_left=flat_log_l,
-            force_log_right=flat_log_r
+            gif_path=output_gif,
+            force_log_left=[v for e in self.force_log_l for v in e],
+            force_log_right=[v for e in self.force_log_r for v in e]
         )
 
-    def publish_traj(self, arm, positions, duration):
+    def publish_traj(self, arm, positions, velocities, duration):
         traj = JointTrajectory()
         traj.joint_names = self.joint_names_map[arm]
-        traj.header.stamp = rospy.Time.now() + rospy.Duration(0.01)
+        traj.header.stamp = rospy.Time(0) # Execute ASAP
         
         point = JointTrajectoryPoint()
         point.positions = positions
+        point.velocities = velocities
         point.time_from_start = rospy.Duration(duration)
         traj.points = [point]
         

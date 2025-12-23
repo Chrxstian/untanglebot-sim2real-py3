@@ -1,9 +1,11 @@
+import io
 import torch
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import animation
+import PIL.Image
 from mpl_toolkits.mplot3d import Axes3D
 
 class NextageVisualizer:
@@ -48,28 +50,54 @@ class NextageVisualizer:
             
         return line + lines
 
-    def generate_gif(self, trajectory_list, filename="IK_motion.gif", fps=10):
-        if (not trajectory_list) or (len(trajectory_list) == 0):
-            print("No trajectory data provided for GIF generation.")
-            return
-        
+    def _create_animation(self, trajectory_list, fps):
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
+        ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
         ax.set_xlim(-0.2, 0.6); ax.set_ylim(-0.6, 0.6); ax.set_zlim(-0.1, 0.8)
 
         ims = []
-        
-        # Downsample
         step = max(1, len(trajectory_list) // 50) 
-        
         for i in range(0, len(trajectory_list), step):
-            th = trajectory_list[i]
-            art = self.plot_arm(ax, th)
+            art = self.plot_arm(ax, trajectory_list[i])
             ims.append(art)
             
         ani = animation.ArtistAnimation(fig, ims, interval=1000/fps, blit=True)
+        return fig, ani
+
+    def get_gif_bytes(self, trajectory_list, fps=30):
+        if not trajectory_list: return None
+
+        fig = plt.figure(figsize=(8, 6))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        frames = []
+        step = max(1, len(trajectory_list) // 50)
+
+        for i in range(0, len(trajectory_list), step):
+            ax.cla()
+            # Set limits and labels once per frame clear
+            ax.set_xlim(-0.2, 0.6); ax.set_ylim(-0.6, 0.6); ax.set_zlim(-0.1, 0.8)
+            self.plot_arm(ax, trajectory_list[i])
+            
+            # Draw and convert the canvas directly to a Pillow Image
+            fig.canvas.draw()
+            frames.append(PIL.Image.frombytes('RGB', fig.canvas.get_width_height(), 
+                                            fig.canvas.tostring_rgb()))
+
+        plt.close(fig)
+        if not frames: return None
+
+        # Save the frame list to a single output buffer
+        out = io.BytesIO()
+        frames[0].save(out, format='GIF', save_all=True, append_images=frames[1:], 
+                       duration=int(1000/fps), loop=0)
+        return out.getvalue()
+
+    def generate_gif(self, trajectory_list, filename, fps=30):
+        """Generates the gif and saves it to a file."""
+        if not trajectory_list: return
+        
+        fig, ani = self._create_animation(trajectory_list, fps)
         ani.save(filename, writer='pillow')
         plt.close(fig)

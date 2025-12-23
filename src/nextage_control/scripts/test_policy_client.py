@@ -7,7 +7,7 @@ import json
 
 from nextage_control.srv import ExecutePolicyAction, ExecutePolicyActionRequest
 
-SERVICE_NAME = '/policy_action_service'
+SERVICE_NAME = '/execute_policy_action'
 
 TEST_CASES = {
     '1': {

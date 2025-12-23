@@ -4,12 +4,13 @@
 import rospy
 import numpy as np
 import torch
+import time
 import os
 import math
 import rospkg
 from datetime import datetime
 from geometry_msgs.msg import WrenchStamped
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, UInt8MultiArray
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
@@ -46,6 +47,7 @@ class IKPullService:
         self.force_log_l = []
         self.force_log_r = []
         self.current_force_mag = {'left': 0.0, 'right': 0.0}
+        self.current_force = {'left': np.zeros(3), 'right': np.zeros(3)}
 
         self.joint_names_map = {
             'left':  ['LARM_JOINT0', 'LARM_JOINT1', 'LARM_JOINT2', 'LARM_JOINT3', 'LARM_JOINT4', 'LARM_JOINT5'],
@@ -56,6 +58,8 @@ class IKPullService:
             'left':  rospy.Publisher('/larm_controller/command', JointTrajectory, queue_size=1),
             'right': rospy.Publisher('/rarm_controller/command', JointTrajectory, queue_size=1)
         }
+
+        self.gif_pub = rospy.Publisher('/debug_gui/preview_gif', UInt8MultiArray, queue_size=1)
 
         rospy.Subscriber('/joint_states', JointState, self.cb_joints)
         rospy.Subscriber('/left/ft_gym_tared', WrenchStamped, self.cb_force_l)
@@ -74,22 +78,19 @@ class IKPullService:
     def cb_force_l(self, msg):
         if not self.monitoring_active:
             return
-        mag = math.sqrt(msg.wrench.force.x**2 +
-                        msg.wrench.force.y**2 +
-                        msg.wrench.force.z**2)
-        self.current_force_mag['left'] = mag
-        self.force_log_l.append([msg.header.stamp.to_sec(), msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z])
-
+        current_force = np.array([msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z])
+        self.current_force['left'] = current_force
+        self.current_force_mag['left'] = np.linalg.norm(current_force)
+        
     def cb_force_r(self, msg):
         if not self.monitoring_active:
             return
-        mag = math.sqrt(msg.wrench.force.x**2 +
-                        msg.wrench.force.y**2 +
-                        msg.wrench.force.z**2)
-        self.current_force_mag['right'] = mag
-        self.force_log_r.append([msg.header.stamp.to_sec(), msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z])
+        current_force = np.array([msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z])
+        self.current_force['right'] = current_force
+        self.current_force_mag['right'] = np.linalg.norm(current_force)
 
     def clear_force_history(self):
+        self.current_force = {'left': np.zeros(3), 'right': np.zeros(3)}
         self.current_force_mag = {'left': 0.0, 'right': 0.0}
         self.force_log_l = []
         self.force_log_r = []
@@ -109,7 +110,8 @@ class IKPullService:
 
     def handle_pull(self, req):
         self.tare_ft_sensors()
-        
+        self.clear_force_history()
+
         arm = req.arm.lower()
         if arm not in self.solvers:
             return ExecuteForcePullResponse(success=False, message="Invalid Arm ID", force_limit_met=False)
@@ -131,17 +133,19 @@ class IKPullService:
         dir_vec = dir_vec / norm
 
         dt = 0.005
+        pull_distance = 0.015
+        pull_speed = 0.03
+        
         rate = rospy.Rate(1.0 / dt)
-        total_time = req.distance / req.speed
+        total_time = pull_distance / pull_speed
         steps = int(total_time / dt)
         
         mode_str = "DRY RUN PREVIEW" if req.dry_run else "REAL EXECUTION"
-        rospy.loginfo(f"[IK-Service] {mode_str}: Pulling {arm} for {req.distance:.2f}m ({steps} steps)")
+        rospy.loginfo(f"[IK-Service] {mode_str}: Pulling {arm} for {pull_distance:.2f}m ({steps} steps)")
 
         # State Reset
         if not req.dry_run:
             self.monitoring_active = True
-            self.clear_force_history()
         
         force_triggered = False
         ik_failed = False
@@ -150,21 +154,36 @@ class IKPullService:
         # --- Trajectory Generation Loop ---
         for i in range(steps):
             if rospy.is_shutdown(): break
-
+                
             # 1. Force Check
-            if not req.dry_run:
-                current_force = self.current_force_mag[arm]
-                if current_force > req.force_threshold:
-                    force_triggered = True
-                    rospy.logwarn(f"[IK-Service] FORCE LIMIT TRIGGERED ({current_force:.2f}N)")
-                    break
+            current_force_mag = self.current_force_mag[arm]
+            if i % 10 == 0:
+                self.force_log_l.append(self.current_force["left"].copy())
+                self.force_log_r.append(self.current_force["right"].copy())
+
+            if current_force_mag > req.force_threshold:
+                force_triggered = True
+                force_history_size = int(req.force_history_size)
+                rospy.logwarn("[IK-Service] FORCE LIMIT TRIGGERED ({:.2f}N > {:.2f}N)".format(current_force_mag, req.force_threshold))
+                rospy.logwarn("[IK-Service] Stopping Pull Action, padding force log to size {}.".format(req.force_history_size))
+                if len(self.force_log_l) > 0:
+                    last_force_l, last_force_r = self.force_log_l[-1].copy(), self.force_log_r[-1].copy()
+                else:
+                    last_force_l, last_force_r = np.zeros(3), np.zeros(3)
+                # Padding of force log with last force value
+                while len(self.force_log_l) < force_history_size:
+                    self.force_log_l.append(last_force_l.copy())
+                while len(self.force_log_r) < force_history_size:
+                    self.force_log_r.append(last_force_r.copy())
+                time.sleep(0.2)
+                break
 
             # 2. FK & Target Generation
             current_pos_hom, _ = solver.batch_FK(q_curr)
             next_pos_hom = current_pos_hom.clone()
             
             # Move along vector
-            move_step = torch.tensor(dir_vec * req.speed * dt, dtype=torch.float32, device=self.device)
+            move_step = torch.tensor(dir_vec * pull_speed * dt, dtype=torch.float32, device=self.device)
             next_pos_hom[0, :3, 3] += move_step
             
             # 3. IK Solve
@@ -208,13 +227,14 @@ class IKPullService:
         self.monitoring_active = False
         output_gif = ""
 
+        # Generate GIF for preview or failure analysis, publish to debug GUI
         if req.dry_run or ik_failed:
-            # Generate GIF for preview or failure analysis
-            current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            timestamp_str = f"preview_{current_time}" if req.dry_run else f"fail_{current_time}"
-            output_gif = os.path.join(self.vis_dir, f"ik_pull_{arm}_{timestamp_str}.gif")
-            rospy.loginfo(f"[IK-Service] Generating GIF at {output_gif}...")
-            self.visualizers[arm].generate_gif(joint_log, filename=output_gif, fps=30)
+            gif_data = self.visualizers[arm].get_gif_bytes(joint_log, fps=30)
+            if gif_data:
+                msg = UInt8MultiArray()
+                msg.data = list(gif_data)
+                self.gif_pub.publish(msg)
+                rospy.loginfo(f"Published GIF preview: {len(msg.data)} bytes")
 
         # Construct Message
         if ik_failed:
@@ -226,6 +246,10 @@ class IKPullService:
         else:
             final_msg = "Dry Run Success" if req.dry_run else "Goal Reached"
             success = True
+
+        assert len(self.force_log_l) == req.force_history_size, "Left force log size mismatch"
+        assert len(self.force_log_r) == req.force_history_size, "Right force log size mismatch"
+        rospy.loginfo("returning force logs of shape L:{} R:{}".format(len(self.force_log_l), len(self.force_log_r)))
 
         return ExecuteForcePullResponse(
             success=success, 

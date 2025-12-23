@@ -18,9 +18,8 @@ Because there is no collision avoidance using the velocity controller, I recomme
 rosservice call /execute_force_pull "{
   arm: 'left', 
   direction: [0.0, 0.0, -1.0], 
-  speed: 0.03, 
-  distance: 0.05, 
-  force_threshold: 10.0, 
+  force_threshold: 10.0,
+  force_history_size: 10,
   dry_run: true
 }"
 ```

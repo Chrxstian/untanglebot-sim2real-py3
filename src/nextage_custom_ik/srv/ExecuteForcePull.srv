@@ -1,9 +1,8 @@
 # Request
 string arm             # "left" or "right"
 float64[] direction    # [dx, dy, dz] normalized direction vector
-float64 speed          # Speed in [m/s]
-float64 distance       # Maximum pull distance in [m]
 float64 force_threshold # Force limit [N]
+float64 force_history_size # Number of timesteps in the force log to policy
 bool dry_run           # If true, calculate path & make GIF, but DO NOT MOVE
 
 ---

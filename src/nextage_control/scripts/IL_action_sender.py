@@ -32,7 +32,7 @@ def send_service_request(request_data):
     try:
         print("\n" + "="*50)
         
-        service_name = '/policy_action_service'
+        service_name = '/execute_policy_action'
         rospy.wait_for_service(service_name, timeout=2.0)
         service = rospy.ServiceProxy(service_name, ExecutePolicyAction)
         

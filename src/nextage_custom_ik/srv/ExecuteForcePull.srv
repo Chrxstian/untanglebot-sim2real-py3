@@ -10,6 +10,5 @@ bool dry_run           # If true, calculate path & make GIF, but DO NOT MOVE
 bool success           # True if action finished (goal reached OR force limit)
 bool force_limit_met   # True if the stop was caused by the force limit
 string message         # e.g. "Goal Reached", "Force Limit Triggered", "IK Failed"
-string gif_path        # path to the generated GIF for confirmation
 float64[] force_log_left    # Raw log: flattened array of [time, fx, fy, fz, time, fx, ...]
 float64[] force_log_right   # Raw log: flattened array of [time, fx, fy, fz, time, fx, ...]

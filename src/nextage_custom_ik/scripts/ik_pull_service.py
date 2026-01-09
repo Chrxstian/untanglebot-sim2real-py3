@@ -6,11 +6,8 @@ import numpy as np
 import torch
 import time
 import os
-import math
 import rospkg
-from datetime import datetime
 from geometry_msgs.msg import WrenchStamped
-from std_msgs.msg import Bool, UInt8MultiArray
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
@@ -59,14 +56,9 @@ class IKPullService:
             'right': rospy.Publisher('/rarm_controller/command', JointTrajectory, queue_size=1)
         }
 
-        self.gif_pub = rospy.Publisher('/debug_gui/preview_gif', UInt8MultiArray, queue_size=1)
-
         rospy.Subscriber('/joint_states', JointState, self.cb_joints)
         rospy.Subscriber('/left/ft_gym_tared', WrenchStamped, self.cb_force_l)
         rospy.Subscriber('/right/ft_gym_tared', WrenchStamped, self.cb_force_r)
-
-        # Force Sensor Tare Publisher
-        self.tare_pub = rospy.Publisher("/ft/trigger_tare", Bool, queue_size=1)
 
         self.srv = rospy.Service('/execute_force_pull', ExecuteForcePull, self.handle_pull)
         rospy.loginfo("[IK-Service] Service Ready: /execute_force_pull")
@@ -95,12 +87,6 @@ class IKPullService:
         self.force_log_l = []
         self.force_log_r = []
         
-    def tare_ft_sensors(self):
-        msg = Bool(True)
-        rospy.loginfo("Sending FT tare trigger...")
-        rospy.sleep(0.1)
-        self.tare_pub.publish(msg)
-
     def get_arm_joints(self, arm):
         names = self.joint_names_map[arm]
         try:
@@ -109,7 +95,6 @@ class IKPullService:
             return None
 
     def handle_pull(self, req):
-        self.tare_ft_sensors()
         self.clear_force_history()
 
         arm = req.arm.lower()
@@ -133,7 +118,7 @@ class IKPullService:
         dir_vec = dir_vec / norm
 
         dt = 0.005
-        pull_distance = 0.015
+        pull_distance = 0.03
         pull_speed = 0.03
         
         rate = rospy.Rate(1.0 / dt)
@@ -157,7 +142,7 @@ class IKPullService:
                 
             # 1. Force Check
             current_force_mag = self.current_force_mag[arm]
-            if i % 10 == 0:
+            if i % 20 == 0:
                 self.force_log_l.append(self.current_force["left"].copy())
                 self.force_log_r.append(self.current_force["right"].copy())
 
@@ -225,16 +210,6 @@ class IKPullService:
 
         # --- Finish & Response ---
         self.monitoring_active = False
-        output_gif = ""
-
-        # Generate GIF for preview or failure analysis, publish to debug GUI
-        if req.dry_run or ik_failed:
-            gif_data = self.visualizers[arm].get_gif_bytes(joint_log, fps=30)
-            if gif_data:
-                msg = UInt8MultiArray()
-                msg.data = list(gif_data)
-                self.gif_pub.publish(msg)
-                rospy.loginfo(f"Published GIF preview: {len(msg.data)} bytes")
 
         # Construct Message
         if ik_failed:
@@ -255,7 +230,6 @@ class IKPullService:
             success=success, 
             message=final_msg, 
             force_limit_met=force_triggered,
-            gif_path=output_gif,
             force_log_left=[v for e in self.force_log_l for v in e],
             force_log_right=[v for e in self.force_log_r for v in e]
         )

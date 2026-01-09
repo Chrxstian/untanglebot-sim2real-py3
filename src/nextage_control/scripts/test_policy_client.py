@@ -79,16 +79,16 @@ TEST_CASES = {
     '9': {
         "name": "Bimanual PIN LEFT & PULL RIGHT",
         "request": {
-            'force_left': {'x': 0.0, 'y': 0.0, 'z': 0.0}, 'grasp_idx_left': 20,
-            'force_right': {'x': 0.0, 'y': 1.0, 'z': 0.0}, 'grasp_idx_right': 20,
+            'force_left': {'x': 0.0, 'y': 0.0, 'z': 0.0}, 'grasp_idx_left': 13,
+            'force_right': {'x': 0.0, 'y': 1.0, 'z': 0.0}, 'grasp_idx_right': 18,
             'frame_id': 'WAIST', 'force_threshold': 15.0
         }
     },
     '10': {
         "name": "Bimanual PIN RIGHT & PULL LEFT",
         "request": {
-            'force_left': {'x': 0.0, 'y': -1.0, 'z': 0.0}, 'grasp_idx_left': 20,
-            'force_right': {'x': 0.0, 'y': 0.0, 'z': 0.0}, 'grasp_idx_right': 20,
+            'force_left': {'x': 0.0, 'y': -1.0, 'z': 0.0}, 'grasp_idx_left': 13,
+            'force_right': {'x': 0.0, 'y': 0.0, 'z': 0.0}, 'grasp_idx_right': 18,
             'frame_id': 'WAIST', 'force_threshold': 15.0
         }
     },

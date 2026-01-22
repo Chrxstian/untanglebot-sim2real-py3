@@ -117,9 +117,12 @@ class IKPullService:
              return ExecuteForcePullResponse(success=False, message="Zero Direction Vector", force_limit_met=False)
         dir_vec = dir_vec / norm
 
+        # The following equation has to be satisfied:
+        # force_history_size = pull_distance / (pull_speed * dt) / force_log_interval
         dt = 0.005
         pull_distance = 0.03
         pull_speed = 0.03
+        force_log_interval = 40
         
         rate = rospy.Rate(1.0 / dt)
         total_time = pull_distance / pull_speed
@@ -142,7 +145,7 @@ class IKPullService:
                 
             # 1. Force Check
             current_force_mag = self.current_force_mag[arm]
-            if i % 20 == 0:
+            if i % force_log_interval == 0:
                 self.force_log_l.append(self.current_force["left"].copy())
                 self.force_log_r.append(self.current_force["right"].copy())
 

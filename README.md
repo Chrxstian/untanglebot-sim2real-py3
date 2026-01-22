@@ -19,7 +19,7 @@ rosservice call /execute_force_pull "{
   arm: 'left', 
   direction: [0.0, 0.0, -1.0], 
   force_threshold: 10.0,
-  force_history_size: 10,
+  force_history_size: 5,
   dry_run: true
 }"
 ```

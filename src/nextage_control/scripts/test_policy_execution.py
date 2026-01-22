@@ -1,27 +1,39 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
- 
+
 import rospy
 import random
 import numpy as np
 from nextage_control.srv import ExecutePolicyAction, ExecutePolicyActionRequest
 
-def generate_random_direction():
-
-    # return np.array([0, 1, 0])
-
-    vec = np.array([random.uniform(-1, 1), random.uniform(0, 1), random.uniform(0, 1)])
+def normalize_vector(vec):
+    vec = np.array(vec)
     norm = np.linalg.norm(vec)
-    
-    if norm < 1e-6: # Prevent division by zero
+    if norm < 1e-6:
         return 0.0, 1.0, 0.0
-    
-    # Return normalized vector
     vec = vec / norm
     return vec[0], vec[1], vec[2]
 
+def generate_random_direction():
+    vec = np.array([random.uniform(-1, 1), random.uniform(0, 1), random.uniform(0, 1)])
+    return normalize_vector(vec)
+
 def test_policy_execution():
     rospy.init_node('test_policy_execution_node')
+    
+    USE_RANDOM = False
+    # Predefined sequence of directions to compare different garments
+    PREDEFINED_DIRECTIONS = [
+        (-1, -1, 0),
+        (0, -1, 0),
+        (-1, 0, 0),
+        (-1, 0, 1),
+        (-1, 0, 1),
+        (1, 0, 0),
+        (1, 0, 0),
+        (0, 0, -1),
+        (0, 0, -1)
+    ]
     
     service_name = '/execute_policy_action'
     rospy.loginfo("Waiting for service %s...", service_name)
@@ -33,13 +45,23 @@ def test_policy_execution():
         rospy.logerr("Service not available!")
         return
 
-    count = 1
-    
-    # while not rospy.is_shutdown():
-    while count <= 5:
-    
-        # 1. Generate arbitrary direction
-        rx, ry, rz = generate_random_direction()
+    if USE_RANDOM:
+        iterations = range(5)
+        rospy.loginfo("Running in RANDOM mode (5 steps).")
+    else:
+        iterations = range(len(PREDEFINED_DIRECTIONS))
+        rospy.loginfo("Running in PREDEFINED sequence mode (%d steps).", len(PREDEFINED_DIRECTIONS))
+
+    for i in iterations:
+        if rospy.is_shutdown():
+            break
+
+        # 1. Get direction based on mode
+        if USE_RANDOM:
+            rx, ry, rz = generate_random_direction()
+        else:
+            raw_dir = PREDEFINED_DIRECTIONS[i]
+            rx, ry, rz = normalize_vector(raw_dir)
         
         # 2. Construct the request
         req = ExecutePolicyActionRequest()
@@ -53,15 +75,16 @@ def test_policy_execution():
         req.Force_right.z = rz
         req.grasp_idx_right = 18
         
-        req.frame = 'WAIST'
+        req.frame = 'GYM'
         req.step_m = 0.0
         req.sleep_dt = 0.0
         req.max_steps = 0
-        req.force_threshold = 50.0
+        req.force_threshold = 30.0
         req.workspace_limits = False
 
-        rospy.loginfo("--- Call #%d ---", count)
-        rospy.loginfo("Direction Right: [x: %.2f, y: %.2f, z: %.2f]", rx, ry, rz)
+        rospy.loginfo("--- Call #%d ---", i + 1)
+        rospy.loginfo("Direction Right (Normalized): [x: %.2f, y: %.2f, z: %.2f]", rx, ry, rz)
+        rospy.loginfo("Frame: %s", req.frame)
 
         # 3. Call Service
         try:
@@ -70,7 +93,6 @@ def test_policy_execution():
             if resp.success:
                 rospy.loginfo("Result: SUCCESS. Waiting 0.1 seconds...")
                 rospy.sleep(0.1)
-                count += 1
             else:
                 rospy.logerr("Result: FAILURE. Stopping script.")
                 break
